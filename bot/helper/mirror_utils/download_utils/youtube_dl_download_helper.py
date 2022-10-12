@@ -40,8 +40,7 @@ class YoutubeDLHelper(DownloadHelper):
         self.opts = {
             'progress_hooks': [self.__onDownloadProgress],
             'logger': MyLogger(self),
-            'usenetrc': True,
-            'format': "best/bestvideo+bestaudio"
+            'usenetrc': True
         }
         self.__download_speed = 0
         self.download_speed_readable = ''
@@ -52,6 +51,11 @@ class YoutubeDLHelper(DownloadHelper):
         self.is_cancelled = False
         self.vid_id = ''
         self.__resource_lock = threading.RLock()
+
+    @property
+    def name(self):
+        with self.__resource_lock:
+            return self.__name
 
     @property
     def download_speed(self):
@@ -95,7 +99,7 @@ class YoutubeDLHelper(DownloadHelper):
     def onDownloadError(self, error):
         self.__listener.onDownloadError(error)
 
-    def extractMetaData(self, link):
+    def extractMetaData(self, link, qual):
         if 'hotstar' in link:
             self.opts['geo_bypass_country'] = 'IN'
 
@@ -103,6 +107,9 @@ class YoutubeDLHelper(DownloadHelper):
             try:
                 result = ydl.extract_info(link, download=False)
                 name = ydl.prepare_filename(result)
+                # noobway hack for changing extension after converting to mp3
+                if qual == "audio":
+                  name = name.replace(".mp4", ".mp3").replace(".webm", ".mp3")
             except DownloadError as e:
                 self.onDownloadError(str(e))
                 return
@@ -111,17 +118,17 @@ class YoutubeDLHelper(DownloadHelper):
         if 'entries' in result:
             video = result['entries'][0]
             for v in result['entries']:
-                if v.get('filesize'):
+                if v and v.get('filesize'):
                     self.size += float(v['filesize'])
             # For playlists, ydl.prepare-filename returns the following format: <Playlist Name>-<Id of playlist>.NA
-            self.name = name.split(f"-{result['id']}")[0]
+            self.__name = name.split(f"-{result['id']}")[0]
             self.vid_id = video.get('id')
             self.is_playlist = True
         else:
             video = result
             if video.get('filesize'):
                 self.size = float(video.get('filesize'))
-            self.name = name
+            self.__name = name
             self.vid_id = video.get('id')
         return video
 
@@ -138,11 +145,19 @@ class YoutubeDLHelper(DownloadHelper):
             LOGGER.info("Download Cancelled by User!")
             self.onDownloadError("Download Cancelled by User!")
 
-    def add_download(self, link, path):
+    def add_download(self, link, path, qual):
+        pattern = '^.*(youtu\.be\/|youtube.com\/)(playlist?)'
+        if re.match(pattern, link):
+            self.opts['ignoreerrors'] = True
         self.__onDownloadStart()
-        self.extractMetaData(link)
+        self.extractMetaData(link, qual)
         LOGGER.info(f"Downloading with YT-DL: {link}")
         self.__gid = f"{self.vid_id}{self.__listener.uid}"
+        if qual == "audio":
+          self.opts['format'] = 'bestaudio/best'
+          self.opts['postprocessors'] = [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192',}]
+        else:
+          self.opts['format'] = qual
         if not self.is_playlist:
             self.opts['outtmpl'] = f"{path}/{self.name}"
         else:
